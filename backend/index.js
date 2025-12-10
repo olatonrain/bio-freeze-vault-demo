@@ -4,6 +4,18 @@ const { ethers } = require('ethers');
 const express = require('express');
 const bodyParser = require('body-parser');
 
+const rateLimit = require('express-rate-limit');
+
+// Rule: Maximum 100 requests per 15 minutes per IP
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 100,
+  message: "Too many requests, please try again later."
+});
+
+// Apply it to all requests
+app.use(limiter);
+
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
