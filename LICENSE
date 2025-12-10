@@ -1,0 +1,25 @@
+Business Source License 1.1
+
+Use of the software (the "Software") is subject to the Business Source License 1.1 (the "License").
+
+Change Date: 2029-12-10
+Change License: MIT
+
+The Licensor: Lanre (Bio-Freeze Team)
+The Software: Bio-Freeze Vault Smart Contracts (contracts/ folder)
+
+1. The Licensor hereby grants you the right to copy, modify, create derivative works, redistribute, and make non-production use of the Licensed Work.
+
+2. ADDITIONAL USE GRANT: You may NOT use the Licensed Work for a production use (i.e., making money, launching a competing DeFi protocol, or capturing value) without a specific commercial license from the Licensor.
+
+3. After the Change Date, the License converts to the Change License (MIT), meaning it becomes open source for everyone.
+
+-------------------------------------------------------------------------
+The Frontend (frontend/) and Tools (scripts/) are provided under the MIT License:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so.
