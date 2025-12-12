@@ -3,6 +3,7 @@ const { Telegraf, Markup } = require('telegraf');
 const { ethers } = require('ethers');
 const express = require('express');
 const bodyParser = require('body-parser');
+const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
 // --- CONFIGURATION ---
@@ -20,6 +21,11 @@ const RPC_URL = MODE === 'mainnet'
 
 // --- SETUP ---
 const app = express();
+app.use(cors({
+    origin: ["https://app.immunode.xyz", "http://localhost:3000"], 
+    methods: ["GET", "POST"],
+    credentials: true
+}));
 app.use(bodyParser.json());
 
 // Rate Limiter
@@ -51,7 +57,7 @@ bot.start((ctx) => {
         {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
-                [Markup.button.url('🚀 Open Vault App', process.env.NEXT_PUBLIC_BACKEND_URL ? process.env.NEXT_PUBLIC_BACKEND_URL.replace(':3001', ':3000') : 'http://37.60.247.116:3000')],
+                [Markup.button.url('🚀 Open Vault App', 'https://app.immunode.xyz')],
                 [Markup.button.callback('🔒 PANIC FREEZE', 'freeze_action')]
             ])
         }
