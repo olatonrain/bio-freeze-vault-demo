@@ -1,13 +1,16 @@
 require('dotenv').config({ path: '../.env' });
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf'); // Telegraf still needed for setup
 const { ethers } = require('ethers');
 const express = require('express');
 const bodyParser = require('body-parser');
+const { AuthorizationCode } = require('simple-oauth2');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const axios = require('axios');
+const setupBot = require('./bot'); // <--- IMPORT THE NEW BOT FILE
 
 // --- CONFIGURATION ---
-const PORT = process.env.PORT || 3001; // Ensure this matches .env
+const PORT = process.env.PORT || 3001; 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
@@ -28,6 +31,111 @@ app.use(cors({
 }));
 app.use(bodyParser.json());
 
+// --- OAUTH CONFIGURATION (Real Humanode) ---
+const humanodeConfig = {
+  client: {
+    id: process.env.HUMANODE_CLIENT_ID,
+    secret: process.env.HUMANODE_CLIENT_SECRET,
+  },
+  auth: {
+    tokenHost: 'https://auth.humanode.io', 
+    tokenPath: '/oauth/token',
+    authorizePath: '/oauth/authorize',
+  },
+};
+const client = new AuthorizationCode(humanodeConfig);
+
+// DATABASE (In-Memory)
+let userVaults = {};
+let walletIdentity = {};
+
+// 1. START THE SCAN (Identity Aware)
+app.get('/auth/humanode', (req, res) => {
+    const { userAddress, vaultAddress, amount, action } = req.query;
+    console.log(`🚀 Starting Identity Check for: ${userAddress}`);
+    
+    // Pack state
+    const state = JSON.stringify({ userAddress, vaultAddress, amount, action });
+    
+    const authorizationUri = client.authorizeURL({
+        redirect_uri: 'https://api.immunode.xyz/auth/callback',
+        scope: 'face_scan', 
+        state: Buffer.from(state).toString('base64'), 
+    });
+
+    res.json({ url: authorizationUri });
+});
+
+// 2. HANDLE THE CALLBACK (The Security Core)
+app.get('/auth/callback', async (req, res) => {
+    const { code, state, error } = req.query;
+
+    // A. DECODE STATE
+    let txData = {};
+    try {
+        txData = JSON.parse(Buffer.from(state, 'base64').toString());
+    } catch (e) {
+        return res.redirect(`https://app.immunode.xyz?status=error`);
+    }
+
+    // B. HANDLE ERRORS (User cancelled or No Biomapping)
+    if (error) {
+        console.log("🚨 OAuth Error:", error);
+        return res.redirect(`https://app.immunode.xyz?status=biomapping_missing`);
+    }
+
+    try {
+        // C. GET TOKEN
+        const accessTokenWrapper = await client.getToken({
+            code,
+            redirect_uri: 'https://api.immunode.xyz/auth/callback',
+        });
+
+        // D. GET USER IDENTITY (The Unique Face ID)
+        const userProfile = await axios.get('https://auth.humanode.io/oauth/userinfo', {
+            headers: { Authorization: `Bearer ${accessTokenWrapper.token.access_token}` }
+        });
+
+        const humanodeId = userProfile.data.sub; // The Unique ID of the Face
+        const wallet = txData.userAddress;
+
+        console.log(`🔍 Verifying Identity: ${humanodeId} for Wallet: ${wallet}`);
+
+        // E. IDENTITY LOCK CHECK
+        if (!walletIdentity[wallet]) {
+            // First time? Lock this Face to this Wallet.
+            walletIdentity[wallet] = humanodeId;
+            console.log("🔒 Identity Bound: Wallet linked to Face ID.");
+        } else {
+            // Recurring user? CHECK IF IT MATCHES.
+            if (walletIdentity[wallet] !== humanodeId) {
+                console.log("🚨 INTRUDER DETECTED: Face does not match Wallet Owner!");
+                return res.redirect(`https://app.immunode.xyz?status=compromised`);
+            }
+        }
+
+        // F. SUCCESS - EXECUTE ACTION
+        if (txData.action === 'rescue') {
+            const amountWei = ethers.parseEther(txData.amount.toString());
+            const messageHash = ethers.solidityPackedKeccak256(
+                ["address", "address", "uint256", "address"],
+                [txData.userAddress, txData.userAddress, amountWei, txData.vaultAddress] 
+            );
+            const signature = await oracleWallet.signMessage(ethers.getBytes(messageHash));
+            
+            res.redirect(`https://app.immunode.xyz?status=success&action=rescue&signature=${signature}`);
+
+        } else if (txData.action === 'withdraw') {
+            res.redirect(`https://app.immunode.xyz?status=success&action=withdraw`);
+        }
+
+    } catch (err) {
+        console.error('Identity Check Failed:', err.message);
+        // If profile fetch fails, it usually means biomapping is invalid/expired
+        res.redirect(`https://app.immunode.xyz?status=biomapping_missing`);
+    }
+});
+
 // Rate Limiter
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
@@ -36,84 +144,16 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// --- INIT BOT & WALLET ---
 const bot = new Telegraf(BOT_TOKEN);
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const oracleWallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// DATABASE (In-Memory)
-let userVaults = {}; 
+// --- LOAD BOT LOGIC FROM EXTERNAL FILE ---
+setupBot(bot, userVaults, oracleWallet);
 
 // ==========================================
-// 1. TELEGRAM BOT LOGIC
-// ==========================================
-
-// START COMMAND
-bot.start((ctx) => {
-    ctx.reply(
-        "🛡️ <b>Welcome to Bio-Freeze Vault</b>\n\n" +
-        "1. <b>Create Vault:</b> Open the App to create your safe.\n" +
-        "2. <b>Link:</b> Paste your Vault Address here.\n" +
-        "3. <b>Deposit:</b> Send funds to your Vault Address to secure them.",
-        {
-            parse_mode: 'HTML',
-            ...Markup.inlineKeyboard([
-                [Markup.button.url('🚀 Open Vault App', 'https://app.immunode.xyz')],
-                [Markup.button.callback('🔒 PANIC FREEZE', 'freeze_action')]
-            ])
-        }
-    );
-});
-
-// LINK VAULT (Use HTML mode for bolding)
-bot.on('text', (ctx) => {
-    const msg = ctx.message.text.trim();
-    
-    if (ethers.isAddress(msg)) {
-        userVaults[ctx.from.id] = msg;
-        
-        ctx.reply(
-            `✅ <b>Vault Successfully Linked!</b>\n\n` +
-            `📍 <b>Your Safe Address:</b>\n<code>${msg}</code>\n` +
-            `(Tap address to copy)\n\n` +
-            `💰 <b>How to Protect Funds:</b>\n` +
-            `Go to your Metamask and send HMND to the address above.\n\n` +
-            `🚨 <b>Emergency:</b>\n` +
-            `If you suspect a hack, come back here and tap PANIC FREEZE.`,
-            { parse_mode: 'HTML' }
-        );
-    } else {
-        ctx.reply("❌ That doesn't look like a valid Vault Address. Please copy it from the App.");
-    }
-});
-
-// PANIC FREEZE ACTION
-bot.action('freeze_action', async (ctx) => {
-    const userId = ctx.from.id;
-    const vaultAddr = userVaults[userId];
-
-    if (!vaultAddr) return ctx.reply("⚠️ No Vault linked! Send your address first.");
-
-    await ctx.reply("❄️ Attempting to freeze vault...");
-
-    try {
-        const vaultABI = ["function panicFreeze() external"];
-        const vaultContract = new ethers.Contract(vaultAddr, vaultABI, oracleWallet);
-        
-        const tx = await vaultContract.panicFreeze();
-        
-        await ctx.reply(
-            `✅ <b>VAULT FROZEN!</b>\n\n` + 
-            `🔗 <b>Tx Hash:</b>\n<code>${tx.hash}</code>`, 
-            { parse_mode: 'HTML' }
-        );
-    } catch (e) {
-        console.error(e);
-        ctx.reply("❌ Error: Could not freeze. Is it already frozen?");
-    }
-});
-
-// ==========================================
-// 2. WEB SERVER (ORACLE) LOGIC
+// WEB SERVER (ORACLE) LOGIC
 // ==========================================
 
 app.post('/verify-face', async (req, res) => {
