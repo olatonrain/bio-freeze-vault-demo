@@ -1,26 +1,28 @@
-// backend/sentinel.js (DEBUG VERSION)
+// backend/sentinel.js
 const { ethers } = require('ethers');
 const low = require('lowdb');
 const FileSync = require('lowdb/adapters/FileSync');
 const { Markup } = require('telegraf');
 
-// 1. Setup Database
+// 1. DATABASE
 let db;
 try {
     const adapter = new FileSync('sentinel_db.json');
     db = low(adapter);
-    db.defaults({ users: [], system: { currentGenId: 0 } }).write();
+    db.defaults({ users: [] }).write();
 } catch (err) {
-    console.error('❌ FATAL: DB Init Failed:', err);
+    console.error('❌ DB Init Failed:', err);
     process.exit(1);
 }
 
-// 2. Network Config
+// 2. NETWORK CONFIGURATION
 const NETWORKS = {
-    // Testnet 5 Address (Known)
-    testnet: "0x54c62a9b61e7036d21a30c6a59f08d1f602b19e4", 
-    // Mainnet Address (PLACEHOLDER - See Note Below)
-    mainnet: "0xE859bef3E0Fc4305e0F5a538B93D68F5449D6EC4" 
+    // Testnet 5 (Israfel) - KNOWN WORKING
+    testnet: "0x54c62a9b61e7036d21a30c6a59f08d1f602b19e4",
+    
+    // Mainnet - PLACEHOLDER
+    // You must replace this if you switch to Mainnet
+    mainnet: "0x45E7F628eFd31774De8299EABC80D73Be3E751B3" 
 };
 
 const CONFIG = {
@@ -35,138 +37,125 @@ const ABI = [
 ];
 
 module.exports = function setupSentinel(bot, provider) {
-    console.log("🛠️ SENTINEL DEBUG: Initializing module...");
     
-    // 3. Detect Network Immediately
-    let contractAddress = null;
-    
-    // Check connection on startup
-    provider.getNetwork().then(network => {
-        console.log(`🛠️ SENTINEL DEBUG: Connected to Chain ID ${network.chainId}`);
-        
-        // Auto-select address based on chain ID
-        if (network.chainId === 14823n || network.chainId === 0x3A05n) { 
-            contractAddress = NETWORKS.testnet;
-            console.log(`✅ SENTINEL DEBUG: Selected TESTNET Address: ${contractAddress}`);
-        } else if (network.chainId === 5234n || network.chainId === 0x1472n) { 
-            contractAddress = NETWORKS.mainnet;
-            console.log(`⚠️ SENTINEL DEBUG: Selected MAINNET Address: ${contractAddress}`);
-            console.log(`   (Make sure this address is the real Mainnet Biomapping contract!)`);
-        } else {
-            console.warn(`⚠️ SENTINEL DEBUG: Unknown Chain ID ${network.chainId}. Defaulting to Testnet.`);
-            contractAddress = NETWORKS.testnet;
-        }
-    }).catch(err => {
-        console.error("❌ SENTINEL DEBUG: RPC Connection Failed on Startup:", err.message);
-    });
+    // [UI/UX] Module Init Log
+    console.log("👁️  Sentinel Module: Initializing...");
 
-    // --- HELPER: Status Check ---
-    async function getStatus(walletAddr) {
-        console.log(`🛠️ DEBUG: getStatus called for ${walletAddr}`);
+    // 3. AUTO-DETECT NETWORK
+    let contractAddress = null;
+    let networkName = "Unknown";
+
+    provider.getNetwork().then(network => {
+        const chainId = network.chainId;
         
-        if (!contractAddress) {
-            console.error("❌ DEBUG: Contract Address is UNDEFINED (RPC might be down)");
-            return { error: true, message: "Network not ready. RPC connecting..." };
+        if (chainId === 14823n || chainId === 0x3A05n) { 
+            contractAddress = NETWORKS.testnet;
+            networkName = "Testnet 5";
+            console.log(`   ✅ Connected to: ${networkName}`);
+            console.log(`   🎯 Contract:     ${contractAddress}`);
+        } else if (chainId === 5234n || chainId === 0x1472n) { 
+            contractAddress = NETWORKS.mainnet;
+            networkName = "Mainnet";
+            console.log(`   ⚠️ Connected to: ${networkName}`);
+            console.log(`   🎯 Contract:     ${contractAddress}`);
+        } else {
+            console.warn(`   ⚠️ Unknown Chain ID (${chainId}). Defaulting to Testnet config.`);
+            contractAddress = NETWORKS.testnet;
         }
+    }).catch(err => console.error("   ❌ RPC Connection Failed:", err.message));
+
+    // --- STATUS CHECK LOGIC ---
+    async function getStatus(walletAddr) {
+        if (!contractAddress) return { error: true, message: "Network initializing..." };
 
         try {
+            console.log(`   🔍 [Sentinel] Checking status for ${walletAddr}...`);
             const contract = new ethers.Contract(contractAddress, ABI, provider);
             
-            console.log("🛠️ DEBUG: Calling currentGeneration()...");
+            // 1. Current Gen
             const genId = await contract.currentGeneration();
-            console.log(`🛠️ DEBUG: Generation ID: ${genId}`);
-
-            console.log("🛠️ DEBUG: Calling biomappings()...");
+            
+            // 2. Mapping Check
             const cleanAddr = ethers.getAddress(walletAddr); 
             const result = await contract.biomappings(cleanAddr, genId);
             
             if (!result || result.length === 0 || result[0] === 0n) {
-                console.log("🛠️ DEBUG: Not Mapped");
+                console.log(`   ❌ [Sentinel] Result: Not Mapped`);
                 return { active: false, daysLeft: 0, status: 'not_mapped' };
             }
 
+            // 3. Time Calculation
             const genStart = await contract.generationStartBlocks(genId);
             const currentBlock = BigInt(await provider.getBlockNumber());
             const expiryBlock = genStart + CONFIG.BLOCKS_PER_GENERATION;
             const blocksLeft = expiryBlock - currentBlock;
             const daysLeft = Math.floor(Number(blocksLeft) * 6 / 86400); 
             
+            console.log(`   ✅ [Sentinel] Result: Active (${daysLeft} days left)`);
             return { active: true, daysLeft, status: 'active' };
 
         } catch (e) {
-            console.error(`❌ DEBUG: Blockchain Error:`, e);
-            return { error: true, message: e.message };
+            console.error(`   ❌ [Sentinel] Error:`, e.message);
+            return { error: true, message: "Blockchain check failed." };
         }
     }
 
-    const getSentinelMenu = () => {
-        return Markup.inlineKeyboard([
-            [Markup.button.callback('📡 Check Status', 'sentinel_status')],
-            [Markup.button.callback('⬅️ Back to Menu', 'show_main_menu')]
-        ]);
-    };
+    // --- MENUS ---
+    const getSentinelMenu = () => Markup.inlineKeyboard([
+        [Markup.button.callback('📡 Check Status', 'sentinel_status')],
+        [Markup.button.callback('⬅️ Back to Menu', 'show_main_menu')]
+    ]);
 
+    // --- COMMANDS & ACTIONS ---
     bot.command('sentinel', async (ctx) => {
-        ctx.reply("👁️ **Sentinel Setup**\n\nReply with your **Wallet Address**.", { parse_mode: 'Markdown' });
+        ctx.reply(`👁️ **Sentinel Setup (${networkName})**\n\nReply with your **Wallet Address**.`, { parse_mode: 'Markdown' });
     });
 
-    // --- ACTION HANDLER ---
     bot.action('sentinel_status', async (ctx) => {
-        console.log("👉 DEBUG: Button 'sentinel_status' CLICKED by user", ctx.from.id);
+        const userId = ctx.from.id;
+        const user = db.get('users').find({ chatId: userId }).value();
         
-        try {
-            // 1. Try to answer the click immediately (stops spinner)
-            await ctx.answerCbQuery("🔍 Checking...").catch(e => console.error("CbQuery Error:", e.message));
+        if (!user) return ctx.reply("❌ No wallet registered.");
 
-            const userId = ctx.from.id;
-            const user = db.get('users').find({ chatId: userId }).value();
-            
-            if (!user) {
-                console.log("👉 DEBUG: User not found in DB");
-                return ctx.reply("❌ No wallet registered. Please send your address first.");
-            }
-
-            console.log(`👉 DEBUG: Checking wallet ${user.wallet}`);
-            const status = await getStatus(user.wallet);
-            
-            let message;
-            if (status.error) {
-                message = `⚠️ **System Error**\n\n\`${status.message}\``;
-            } else if (status.status === 'not_mapped') {
-                message = `❌ **Not Biomapped**\n\nWallet: \`${user.wallet}\`\nStatus: Unverified on this network.`;
-            } else if (status.status === 'expired') {
-                message = `🔴 **Biomap EXPIRED!**\n\nPlease re-enroll.`;
-            } else {
-                const emoji = status.daysLeft <= 7 ? '🟡' : '🟢';
-                message = `${emoji} **Status: Active**\n\nWallet: \`${user.wallet}\`\nExpires in: **${status.daysLeft} Days**`;
-            }
-
-            console.log("👉 DEBUG: Sending Reply...");
-            await ctx.reply(message, { parse_mode: 'Markdown', ...getSentinelMenu() });
-            console.log("✅ DEBUG: Reply Sent!");
-
-        } catch (err) {
-            console.error("❌ FATAL ACTION ERROR:", err);
-            ctx.reply("❌ Bot crashed while checking status.");
+        await ctx.answerCbQuery("🔍 Checking Blockchain...");
+        
+        const status = await getStatus(user.wallet);
+        let message;
+        
+        if (status.error) {
+            message = `⚠️ **System Error**\n\`${status.message}\``;
+        } else if (status.status === 'not_mapped') {
+            message = `❌ **Not Biomapped**\n\nNetwork: ${networkName}\nWallet: \`${user.wallet}\`\n\n_Status: Not found on this network._`;
+        } else {
+            const emoji = status.daysLeft <= 7 ? '🟡' : '🟢';
+            message = `${emoji} **Active**\n\nNetwork: ${networkName}\nExpires in: **${status.daysLeft} Days**`;
         }
+        
+        await ctx.reply(message, { parse_mode: 'Markdown', ...getSentinelMenu() });
     });
 
-    // ... handleMessage remains same ...
     const handleMessage = async (ctx) => {
         const text = ctx.message.text.trim();
         const userId = ctx.from.id;
-        if (!ethers.isAddress(text)) return false;
 
-        const checksumAddress = ethers.getAddress(text);
-        const existing = db.get('users').find({ chatId: userId }).value();
+        if (!ethers.isAddress(text)) return false;
         
+        const checksumAddress = ethers.getAddress(text);
+        
+        // Update DB
+        const existing = db.get('users').find({ chatId: userId }).value();
         if (existing) {
             db.get('users').find({ chatId: userId }).assign({ wallet: checksumAddress, updatedAt: Date.now() }).write();
         } else {
             db.get('users').push({ chatId: userId, wallet: checksumAddress, createdAt: Date.now(), username: ctx.from.username }).write();
         }
 
-        await ctx.reply(`👁️ **Sentinel Activated**\nMonitoring: \`${checksumAddress}\``, { parse_mode: 'Markdown', ...getSentinelMenu() });
+        console.log(`   💾 [Sentinel] User ${userId} registered wallet ${checksumAddress}`);
+
+        await ctx.reply(
+            `👁️ **Sentinel Activated**\nTarget: \`${checksumAddress}\`\nNetwork: ${networkName}`, 
+            { parse_mode: 'Markdown', ...getSentinelMenu() }
+        );
         return true;
     };
 
