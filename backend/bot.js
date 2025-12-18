@@ -1,125 +1,94 @@
-// bot.js
+// backend/bot.js
 const { Markup } = require('telegraf');
 const { ethers } = require('ethers');
 
-module.exports = function setupBot(bot, userVaults, oracleWallet) {
+// Accepted userState object from index.js
+module.exports = function setupBot(bot, userVaults, oracleWallet, userState) {
 
     // --- MENUS ---
-    const getMainMenu = () => {
-        return Markup.inlineKeyboard([
-            [Markup.button.callback('🔒 FREEZE ASSET', 'freeze_action')],
-            [Markup.button.callback('🚫 BLOCK WITHDRAWAL', 'block_action')],
-            [Markup.button.url('🚀 Open Vault App', 'https://app.immunode.xyz')]
-        ]);
-    };
+    const getWelcomeMenu = () => Markup.inlineKeyboard([
+        [Markup.button.callback('👁️ Use Sentinel (Monitor)', 'choose_sentinel')],
+        [Markup.button.callback('🛡️ Use Vault (Protect)', 'choose_vault')]
+    ]);
 
-    const getLinkMenu = () => {
-        return Markup.inlineKeyboard([
-            [Markup.button.url('🚀 Open Vault App', 'https://app.immunode.xyz')]
-        ]);
-    };
+    const getVaultMenu = () => Markup.inlineKeyboard([
+        [Markup.button.callback('🔒 FREEZE ASSET', 'freeze_action')],
+        [Markup.button.callback('🚫 BLOCK WITHDRAWAL', 'block_action')],
+        [Markup.button.callback('⬅️ Back to Menu', 'show_main_menu')]
+    ]);
 
-    // --- COMMANDS ---
-
-    // 1. START: Check if wallet is linked
-    bot.start((ctx) => {
-        const userId = ctx.from.id;
-        const vaultAddr = userVaults[userId];
-
-        if (vaultAddr) {
-            // WALLET LINKED: Show Full Dashboard
-            ctx.reply(
-                `🛡️ <b>Bio-Freeze Control Panel</b>\n\n` +
-                `✅ <b>Vault Linked:</b>\n<code>${vaultAddr}</code>\n\n` +
-                `Select an action below:`,
-                {
-                    parse_mode: 'HTML',
-                    ...getMainMenu()
-                }
-            );
-        } else {
-            // NO WALLET: Show Instructions Only
-            ctx.reply(
-                "🛡️ <b>Welcome to Bio-Freeze Vault</b>\n\n" +
-                "⚠️ <b>Status: No Vault Linked</b>\n\n" +
-                "To activate this bot:\n" +
-                "1. Copy your Vault Address from the App.\n" +
-                "2. Paste it here in the chat.",
-                {
-                    parse_mode: 'HTML',
-                    ...getLinkMenu()
-                }
-            );
-        }
-    });
-
-    // 2. LINK VAULT HANDLER
-    bot.on('text', (ctx) => {
-        const msg = ctx.message.text.trim();
-        const userId = ctx.from.id;
+    // --- NAVIGATION ACTIONS ---
     
-        if (ethers.isAddress(msg)) {
-            userVaults[userId] = msg;
-            
-            ctx.reply(
-                `✅ <b>Vault Successfully Linked!</b>\n\n` +
-                `📍 <b>Your Safe Address:</b>\n<code>${msg}</code>\n` +
-                `(Tap address to copy)\n\n` +
-                `👇 <b>Access Control Unlocked:</b>`,
-                { 
-                    parse_mode: 'HTML',
-                    ...getMainMenu() // Show the buttons immediately after linking
-                }
-            );
-        } else {
-            // Only reply error if they don't have a vault yet, to avoid spamming casual chat
-            if(!userVaults[userId]) {
-                ctx.reply("❌ That doesn't look like a valid Vault Address. Please copy it from the App.");
-            }
-        }
+    // 1. Main Menu Action
+    bot.action('show_main_menu', async (ctx) => {
+        await ctx.answerCbQuery();
+        delete userState[ctx.from.id]; // Reset state
+        handleWelcome(ctx);
     });
 
-    // 3. PANIC FREEZE ACTION
+    // 2. Choose Sentinel
+    bot.action('choose_sentinel', async (ctx) => {
+        const userId = ctx.from.id;
+        userState[userId] = 'SENTINEL_MODE'; // <--- SET STATE
+        
+        await ctx.answerCbQuery();
+        await ctx.reply(
+            "👁️ **Sentinel Mode**\n\n" +
+            "Please paste your **Personal Wallet Address** to monitor.", 
+            { parse_mode: 'Markdown' }
+        );
+    });
+
+    // 3. Choose Vault
+    bot.action('choose_vault', async (ctx) => {
+        const userId = ctx.from.id;
+        userState[userId] = 'VAULT_MODE'; // <--- SET STATE
+        
+        await ctx.answerCbQuery();
+        await ctx.reply(
+            "🛡️ **Vault Mode**\n\n" +
+            "Please paste your **Vault Contract Address** to link.", 
+            { parse_mode: 'Markdown' }
+        );
+    });
+
+    // --- VAULT ACTIONS ---
     bot.action('freeze_action', async (ctx) => {
         const userId = ctx.from.id;
         const vaultAddr = userVaults[userId];
+        if (!vaultAddr) return ctx.reply("⚠️ No Vault linked.");
 
-        if (!vaultAddr) return ctx.reply("⚠️ No Vault linked! Send your address first.");
-
-        await ctx.reply("❄️ <b>FREEZING VAULT...</b>\nSent transaction to blockchain...", { parse_mode: 'HTML' });
-
+        await ctx.answerCbQuery("❄️ Freezing..."); 
+        await ctx.reply("❄️ **FREEZING VAULT...**", { parse_mode: 'Markdown' });
+        
         try {
-            const vaultABI = ["function panicFreeze() external"];
-            const vaultContract = new ethers.Contract(vaultAddr, vaultABI, oracleWallet);
-            
-            // Send Tx
+            const vaultContract = new ethers.Contract(vaultAddr, ["function panicFreeze() external"], oracleWallet);
             const tx = await vaultContract.panicFreeze();
-            
-            // Wait for it to be mined so frontend sees it
             await tx.wait();
-            
-            await ctx.reply(
-                `✅ <b>VAULT FROZEN!</b>\n\n` + 
-                `The frontend will update automatically in a few seconds.\n\n` +
-                `🔗 <b>Tx Hash:</b>\n<code>${tx.hash}</code>`, 
-                { parse_mode: 'HTML' }
-            );
+            await ctx.reply(`✅ **FROZEN!**\nHash: \`${tx.hash}\``, { parse_mode: 'Markdown' });
         } catch (e) {
-            console.error(e);
-            ctx.reply("❌ Error: Could not freeze. It might already be frozen.");
+            ctx.reply("❌ Freeze Failed. Vault may already be frozen.");
         }
     });
 
-    // 4. BLOCK ACCOUNT ACTION (New)
-    bot.action('block_action', async (ctx) => {
-        const userId = ctx.from.id;
-        // In a real app, you would flag the user in DB here
-        // delete userVaults[userId]; // Optional: Unlink them
-        
+    // --- EXPORTS ---
+    const handleWelcome = (ctx) => {
         ctx.reply(
-            "🚫 <b>ACCOUNT BLOCKED</b>\n\n" +
-            "All withdrawal requests have been flagged. Please contact support to unlock.",
-            { parse_mode: 'HTML' }
+            "🤖 **ImmuNode Command Center**\n" +
+            "Choose your tool:", 
+            { parse_mode: 'Markdown', ...getWelcomeMenu() }
         );
-    });
+    };
+
+    const linkVault = async (ctx) => {
+        const msg = ctx.message.text.trim();
+        userVaults[ctx.from.id] = msg;
+        await ctx.reply(
+            `✅ **Vault Linked**\n\`${msg}\``,
+            { parse_mode: 'Markdown', ...getVaultMenu() }
+        );
+        return true;
+    };
+
+    return { handleWelcome, linkVault };
 };

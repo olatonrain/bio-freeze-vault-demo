@@ -1,5 +1,13 @@
 {
-  "users": [],
+  "users": [
+    {
+      "chatId": 394044850,
+      "wallet": "0xAC2A4537FE9cdaaDF9bA37D0352da12bcA7e31DF",
+      "createdAt": 1766064881594,
+      "username": "lanrenlight",
+      "updatedAt": 1766067020556
+    }
+  ],
   "system": {
     "currentGenId": 0
   }
