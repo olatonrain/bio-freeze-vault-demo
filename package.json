@@ -15,6 +15,15 @@
     "hardhat": "^2.27.2"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^5.4.0"
+    "@openzeppelin/contracts": "^5.4.0",
+    "axios": "^1.13.2",
+    "cors": "^2.8.5",
+    "ethers": "^6.16.0",
+    "express": "^5.2.1",
+    "lowdb": "^1.0.0",
+    "node-schedule": "^2.1.1",
+    "nodemailer": "^7.0.11",
+    "simple-oauth2": "^5.1.0",
+    "telegraf": "^4.16.3"
   }
 }
